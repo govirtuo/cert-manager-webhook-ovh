@@ -8,10 +8,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	extapi "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -21,21 +23,41 @@ import (
 	"github.com/ovh/go-ovh/ovh"
 )
 
-var GroupName = os.Getenv("GROUP_NAME")
+type DomainsList struct {
+	Domains []string `yaml:"domains"`
+}
 
 func main() {
-	if GroupName == "" {
-		panic("GROUP_NAME must be specified")
+	filename := os.Getenv("DOMAINS_FILENAME")
+	if filename == "" {
+		panic("domains list file name cannot be empty. Please use the env var DOMAINS_FILENAME to set it.")
 	}
 
-	// This will register our ovh DNS provider with the webhook serving
-	// library, making it available as an API under the provided GroupName.
-	// You can register multiple DNS provider implementations with a single
-	// webhook, where the Name() method will be used to disambiguate between
-	// the different implementations.
-	cmd.RunWebhookServer(GroupName,
-		&ovhDNSProviderSolver{},
-	)
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		panic(fmt.Sprintf("cannot read domains file: %s", err))
+	}
+
+	var d DomainsList
+	if err := yaml.Unmarshal(data, &d); err != nil {
+		panic(fmt.Sprintf("cannot unmarshall domains list into yaml: %s", err))
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	for idx, groupname := range d.Domains {
+		fmt.Printf("starting goroutine %d for domain %s\n", idx, groupname)
+		// This will register our ovh DNS provider with the webhook serving
+		// library, making it available as an API under the provided GroupName.
+		// You can register multiple DNS provider implementations with a single
+		// webhook, where the Name() method will be used to disambiguate between
+		// the different implementations.
+		go cmd.RunWebhookServer(groupname,
+			&ovhDNSProviderSolver{},
+		)
+	}
+	// Wait forever
+	wg.Wait()
 }
 
 // ovhDNSProviderSolver implements the provider-specific logic needed to
